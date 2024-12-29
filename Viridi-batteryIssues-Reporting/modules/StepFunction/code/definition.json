@@ -1,0 +1,142 @@
+{
+    "Comment": "Amazon States Language for running jobs on Amazon EMR",
+    "StartAt": "Create an EMR cluster",
+    "States": {
+      "Create an EMR cluster": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::elasticmapreduce:createCluster.sync",
+        "Parameters": {
+          "Name": "$$Project_Name$$",
+          "VisibleToAllUsers": true,
+          "ReleaseLabel": "$$EMR_CLUSTER_VERSION$$",
+          "Applications": [
+            {
+              "Name": "Hive"
+            },
+            {
+              "Name": "Spark"
+            }
+          ],
+          "ServiceRole": "$$EMR_ServiceRole$$",
+          "JobFlowRole": "$$EMR_JobFlowRole$$",
+          "LogUri": "$$EMR_LogUri$$",
+          "Instances": {
+            "KeepJobFlowAliveWhenNoSteps": true,
+            "Ec2SubnetId": "$$EMR_SUBNET_ID$$",
+            "InstanceFleets": [
+              {
+                "Name": "NameNode",
+                "InstanceFleetType": "MASTER",
+                "TargetOnDemandCapacity": 1,
+                "InstanceTypeConfigs": [
+                  {
+                    "InstanceType": "$$EMR_CLUSTER_MASTER_NODE_TYPE$$"
+                  }
+                ]
+              },
+              {
+                "Name": "DataNode",
+                "InstanceFleetType": "CORE",
+                "TargetOnDemandCapacity": $$EMR_CORE_INSTANCE_COUNT$$,
+                "InstanceTypeConfigs": [
+                  {
+                    "InstanceType": "$$EMR_CORE_INSTANCE_TYPE$$"
+                  }
+                ]
+              }
+            ]
+          },
+          "BootstrapActions": [
+            {
+              "Name": "CustomBootStrapAction",
+              "ScriptBootstrapAction": {
+                "Path": "$$S3_BOOTSTRAP_PATH$$",
+                "Args": [
+                  "$$S3_BOOTSTRAP_SCRIPT_ARG1$$",
+                  "$$S3_BOOTSTRAP_SCRIPT_ARG2$$"
+                ]
+              }
+            }
+          ]
+        },
+        "ResultPath": "$.cluster",
+        "Next": "Execute_master.sh_file"
+      },
+      "Execute_master.sh_file": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+        "Parameters": {
+          "ClusterId.$": "$.cluster.ClusterId",
+          "Step": {
+            "Name": "My second EMR step",
+            "ActionOnFailure": "TERMINATE_CLUSTER",
+            "HadoopJarStep": {
+              "Jar": "command-runner.jar",
+              "Args": [
+                "sh",
+                "$$EMR_START_SCRIPT_LOCATION$$"
+              ]
+            }
+          }
+        },
+        "Retry": [
+          {
+            "ErrorEquals": [
+              "States.ALL"
+            ],
+            "IntervalSeconds": 1,
+            "MaxAttempts": 2,
+            "BackoffRate": 2
+          }
+        ],
+        "Catch": [
+          {
+            "ErrorEquals": [
+              "States.TaskFailed"
+            ],
+            "Next": "SNS Failed"
+          }
+        ],
+        "ResultPath": null,
+        "Next": "Terminate_Cluster"
+      },
+      "Terminate_Cluster": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::elasticmapreduce:terminateCluster",
+        "Parameters": {
+          "ClusterId.$": "$.cluster.ClusterId"
+        },
+        "Next": "Succeed"
+      },
+      "Succeed": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::sns:publish",
+        "Parameters": {
+          "TopicArn": "$$TopicArn$$",
+          "Message": "EMR execution using step function completed",
+          "MessageAttributes": {
+            "my_attribute_no_1": {
+              "DataType": "String",
+              "StringValue": "EMR execution using step function completed"
+            }
+          }
+        },
+        "End": true
+      },
+      "SNS Failed": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::sns:publish",
+        "Parameters": {
+          "TopicArn": "$$TopicArn$$",
+          "Message": "EMR execution using step function Failed",
+          "MessageAttributes": {
+            "my_attribute_no_1": {
+              "DataType": "String",
+              "StringValue": "EMR execution using step function Failed"
+            }
+          }
+        },
+        "End": true
+      }
+    }
+  }
